@@ -1,0 +1,65 @@
+const mongoose = require("mongoose");
+
+const productSchema = new mongoose.Schema(
+  {
+    name: { type: String, required: true },
+    brief: { type: String },
+    originalPrice: { type: Number, required: true },
+    salePrice: { type: Number },
+    description: { type: String },
+    image: { type: String },
+    images: [{ type: String }],
+    specifications: [
+      {
+        groupName: String,
+        items: [{ label: String, value: String }],
+      },
+    ],
+    rating: {
+      average: { type: Number, default: 0 },
+      count: { type: Number, default: 0 },
+    },
+    freeDelivery: { type: Boolean, default: true },
+    deliveryTime: { type: String, default: "24 ساعة" },
+    warrantyYears: { type: Number, default: 1 },
+    installment: {
+      available: { type: Boolean, default: false },
+      downPayment: Number,
+      note: String,
+      months: Number,
+      conditions: [String],
+      policy: String,
+    },
+    taxIncluded: { type: Boolean, default: true },
+    category: { type: String, index: true },
+    subCategory: { type: String, index: true },
+    brand: { type: String },
+    inStock: { type: Boolean, default: true },
+    isFeatured: { type: Boolean, default: false },
+    sortOrder: { type: Number, default: 0 },
+  },
+  {
+    timestamps: true,
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true },
+  }
+);
+
+productSchema.index({ brand: 1 });
+productSchema.index({ category: 1, createdAt: -1 });         // getProducts by category
+productSchema.index({ inStock: 1, isFeatured: 1, sortOrder: 1 }); // getFeaturedProducts
+productSchema.index({ brand: 1, inStock: 1 });                // brand filter with stock
+productSchema.index({ name: "text", brand: "text" });         // text search (replaces JS full-scan)
+
+productSchema.virtual("discountPercent").get(function () {
+  if (this.salePrice != null && this.salePrice !== this.originalPrice) {
+    return Math.round(((this.originalPrice - this.salePrice) / this.originalPrice) * 100);
+  }
+  return 0;
+});
+
+productSchema.virtual("price").get(function () {
+  return this.salePrice || this.originalPrice;
+});
+
+module.exports = mongoose.model("Product", productSchema);
