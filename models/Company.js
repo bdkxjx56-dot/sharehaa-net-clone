@@ -32,6 +32,23 @@ const companySchema = new mongoose.Schema({
   link2: { type: String, default: "" },
   link2Type: { type: String, default: "link" },
   file2: { type: String, default: "" },
+
+  // Footer Documents & Certifications
+  crName: { type: String, default: "" },
+  crNumber: { type: String, default: "" },
+  crImage: { type: String, default: "" },
+  crLink: { type: String, default: "" },
+
+  bcTitle: { type: String, default: "" },
+  bcSubtitle: { type: String, default: "" },
+  bcNumber: { type: String, default: "" },
+  bcImage: { type: String, default: "" },
+  bcLink: { type: String, default: "" },
+
+  vatTitle: { type: String, default: "" },
+  vatImage: { type: String, default: "" },
+  vatPdf: { type: String, default: "" },
+
   footerItems: [
     {
       number: { type: String, default: "" },

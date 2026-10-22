@@ -44,7 +44,7 @@ async function deleteFromCloudinary(url, resource_type = "image") {
     const uploadIndex = parts.indexOf("upload");
     let pathParts = parts.slice(uploadIndex + 1);
     if (/^v\d+$/.test(pathParts[0])) pathParts = pathParts.slice(1);
-    const publicId = pathParts.join("/").replace(/\.[^/.]+$/, "");
+    const publicId = resource_type === "raw" ? pathParts.join("/") : pathParts.join("/").replace(/\.[^/.]+$/, "");
     await cloudinary.uploader.destroy(publicId, { resource_type });
   } catch (e) {
     console.error("Cloudinary delete error:", e.message);

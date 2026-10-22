@@ -11,13 +11,14 @@ const Review = require("../models/Review");
 const Checkout = require("../models/Checkout");
 
 const CardFieldSettings = require("../models/CardFieldSettings");
-const { makeImageUpload, uploadToCloudinary, deleteFromCloudinary } = require("../config/cloudinary");
+const { makeImageUpload, makeFileUpload, uploadToCloudinary, deleteFromCloudinary } = require("../config/cloudinary");
 // Shared auth — alias keeps all existing authMiddleware call sites unchanged
 const { adminAuth: authMiddleware } = require("../middleware/auth");
 
 const upload = makeImageUpload();
 
 const uploadFooterImg = makeImageUpload();
+const uploadFooterFile = makeFileUpload();
 const uploadProductImage = makeImageUpload();
 const uploadSubCatImage = makeImageUpload();
 
@@ -54,10 +55,13 @@ const COMPANY_TEXT_FIELDS = [
   "phone", "whatsapp", "website", "email",
   "currencyAr", "currencyEn", "taxNumber",
   "shippingCompany", "paymentMethod", "details",
+  "crName", "crNumber", "crImage", "crLink",
+  "bcTitle", "bcSubtitle", "bcNumber", "bcImage", "bcLink",
+  "vatTitle", "vatImage", "vatPdf",
 ];
 
 const ALLOWED_PAYMENT_METHODS = ["حوالات بنكية فقط", "بطاقة بنكية فقط"];
-const ALLOWED_IMAGE_MIMES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+const ALLOWED_IMAGE_MIMES = ["image/jpeg", "image/png", "image/webp", "image/gif", "image/svg+xml"];
 
 function validateCompanyBody(body) {
   const errors = [];
@@ -300,7 +304,7 @@ router.get("/company/public", async (req, res) => {
   try {
     const company = await Company.findOne(
       {},
-      "nameAr nameEn phone whatsapp email website details logo -_id"
+      "nameAr nameEn phone whatsapp email website details logo crName crNumber crImage crLink bcTitle bcSubtitle bcNumber bcImage bcLink vatTitle vatImage vatPdf -_id"
     ).lean();
     res.json(company || {});
   } catch {
@@ -1103,7 +1107,7 @@ router.put("/products/:id", authMiddleware, uploadProductFieldsEdit.fields([{ na
 router.post("/company/footer-image/:key", authMiddleware, uploadLimiter, uploadFooterImg.single("image"), async (req, res) => {
   try {
     const { key } = req.params;
-    if (!["qrImage", "img1", "img2"].includes(key)) return res.status(400).json({ error: "حقل غير مسموح" });
+    if (!["qrImage", "img1", "img2", "crImage", "bcImage", "vatImage"].includes(key)) return res.status(400).json({ error: "حقل غير مسموح" });
     if (!req.file) return res.status(400).json({ error: "لم يتم رفع صورة" });
     if (!ALLOWED_IMAGE_MIMES.includes(req.file.mimetype))
       return res.status(400).json({ error: "نوع الملف غير مسموح، يُقبل فقط: JPEG, PNG, WebP, GIF" });
@@ -1172,6 +1176,74 @@ router.patch("/card-field-settings", authMiddleware, async (req, res) => {
     res.json({ [field]: doc[field] });
   } catch (err) {
     console.error("[card-field-settings PATCH error]", err);
+    res.status(500).json({ error: "خطأ في الخادم" });
+  }
+});
+
+
+// POST /api/admin/company/footer-file/:key (files: vatPdf, etc.)
+router.post("/company/footer-file/:key", authMiddleware, uploadLimiter, uploadFooterFile.single("file"), async (req, res) => {
+  try {
+    const { key } = req.params;
+    const allowed = ["vatPdf", "crPdf", "bcPdf", "file1", "file2"];
+    if (!allowed.includes(key)) return res.status(400).json({ error: "حقل غير مسموح" });
+    if (!req.file) return res.status(400).json({ error: "لم يتم رفع ملف" });
+    if (req.file.mimetype !== "application/pdf") {
+      return res.status(400).json({ error: "يُقبل فقط ملفات PDF" });
+    }
+
+    let result;
+    try {
+      const publicId = "footer_doc_" + key + "_" + Date.now() + ".pdf";
+      result = await uploadToCloudinary(req.file.buffer, "company/documents", {
+        resource_type: "raw",
+        public_id: publicId,
+      });
+    } catch (uploadErr) {
+      console.error("Cloudinary PDF upload failed:", uploadErr.message);
+      return res.status(500).json({ error: "فشل رفع ملف الـ PDF إلى Cloudinary" });
+    }
+    const newUrl = result.secure_url;
+
+    let company = await Company.findOne();
+    if (!company) company = await Company.create({});
+    const oldUrl = company[key];
+    company[key] = newUrl;
+    try {
+      await company.save();
+    } catch (dbErr) {
+      deleteFromCloudinary(newUrl, "raw").catch((e) => console.error("Orphan cleanup failed:", e.message));
+      return res.status(500).json({ error: "فشل حفظ البيانات" });
+    }
+
+    if (oldUrl && oldUrl.includes("cloudinary.com")) {
+      deleteFromCloudinary(oldUrl, "raw").catch((e) => console.error("Old file delete failed:", e.message));
+    }
+
+    res.json({ url: newUrl });
+  } catch (err) {
+    console.error("footer-file upload error:", err.message);
+    res.status(500).json({ error: "خطأ في الخادم" });
+  }
+});
+
+// DELETE /api/admin/company/footer-media/:key
+router.delete("/company/footer-media/:key", authMiddleware, async (req, res) => {
+  try {
+    const { key } = req.params;
+    const allowed = ["crImage", "bcImage", "vatImage", "vatPdf", "qrImage", "img1", "img2", "file1", "file2"];
+    if (!allowed.includes(key)) return res.status(400).json({ error: "حقل غير مسموح" });
+    let company = await Company.findOne();
+    if (!company) return res.json({ success: true });
+    const oldUrl = company[key];
+    company[key] = "";
+    await company.save();
+    if (oldUrl && oldUrl.includes("cloudinary.com")) {
+      const resource_type = key.toLowerCase().includes("pdf") || key.toLowerCase().includes("file") ? "raw" : "image";
+      deleteFromCloudinary(oldUrl, resource_type).catch((e) => console.error("Cloudinary delete error:", e.message));
+    }
+    res.json({ success: true });
+  } catch (err) {
     res.status(500).json({ error: "خطأ في الخادم" });
   }
 });
