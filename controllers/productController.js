@@ -1,10 +1,11 @@
 const Product = require("../models/Product");
+const SubCategorySettings = require("../models/SubCategorySettings");
 const mongoose = require("mongoose");
 
-// ─── In-memory cache — TTL 300s (5 mins), max 200 entries ─────────────────────
+// ─── In-memory cache — TTL 60s, max 100 entries ──────────────────────────────
 const cache = new Map();
-const CACHE_TTL = 300 * 1000;
-const CACHE_MAX_SIZE = 200;
+const CACHE_TTL = 60 * 1000;
+const CACHE_MAX_SIZE = 100;
 
 function getCached(key) {
   const entry = cache.get(key);
@@ -82,24 +83,16 @@ exports.getProducts = async (req, res) => {
       return res.json(result);
     }
 
-    // Search: execute regex directly in DB with Arabic normalization patterns, avoiding loading 500 items into Node memory
-    const escaped = q.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const arabicPattern = escaped
-      .replace(/[أإآا]/g, "[أإآا]")
-      .replace(/[ىي]/g, "[ىي]")
-      .replace(/[ةه]/g, "[ةه]");
-    const searchRegex = new RegExp(arabicPattern, "i");
-
-    const cacheKey = `search:${brand || ""}:${category || ""}:${q.trim().toLowerCase()}`;
+    // Search: cap at 500 to prevent unbounded memory usage, cache results
+    const normalized = normalizeArabic(q);
+    const cacheKey = `search:${brand || ""}:${category || ""}:${normalized}`;
     const cached = getCached(cacheKey);
     if (cached) return res.json(cached);
 
-    const searchQuery = {
-      ...query,
-      $or: [{ name: searchRegex }, { brand: searchRegex }, { brief: searchRegex }],
-    };
-
-    const filtered = await Product.find(searchQuery).sort(sortObj).limit(100).lean();
+    const products = await Product.find(query).sort(sortObj).limit(500).lean();
+    const filtered = products.filter(
+      (p) => p.name && normalizeArabic(p.name).includes(normalized)
+    );
     setCached(cacheKey, filtered);
     res.json(filtered);
   } catch (err) {
@@ -115,7 +108,7 @@ exports.getFeaturedProducts = async (req, res) => {
     const cached = getCached(cacheKey);
     if (cached) return res.json(cached);
 
-    const featured = await Product.find({ inStock: true, isFeatured: true })
+    const featured = await Product.find({ isFeatured: true })
       .sort({ sortOrder: 1, originalPrice: -1 })
       .limit(6)
       .lean();
@@ -127,14 +120,66 @@ exports.getFeaturedProducts = async (req, res) => {
 
     // Fallback: legacy behaviour — parallel queries
     const [stc, mobily] = await Promise.all([
-      Product.find({ inStock: true, brand: { $regex: /^stc/i } }).sort({ originalPrice: -1 }).limit(2).lean(),
-      Product.find({ inStock: true, brand: { $regex: /موبايلي/ } }).sort({ originalPrice: -1 }).limit(2).lean(),
+      Product.find({ brand: { $regex: /^stc/i } }).sort({ originalPrice: -1 }).limit(2).lean(),
+      Product.find({ brand: { $regex: /موبايلي/ } }).sort({ originalPrice: -1 }).limit(2).lean(),
     ]);
     const result = [...stc, ...mobily];
     setCached(cacheKey, result);
     res.json(result);
   } catch (err) {
     console.error("getFeaturedProducts error:", err);
+    res.status(500).json({ message: "Server error", error: err.message });
+  }
+};
+
+// ─── GET /api/products/home-sections ──────────────────────────────────────────
+exports.getHomeSections = async (req, res) => {
+  try {
+    const cacheKey = "home_sections_all";
+    const cached = getCached(cacheKey);
+    if (cached) return res.json(cached);
+
+    const settings = await SubCategorySettings.find({
+      category: "__brand__",
+      showInHome: true,
+    })
+      .sort({ order: 1 })
+      .lean();
+
+    if (!settings || settings.length === 0) {
+      return res.json([]);
+    }
+
+    const sections = await Promise.all(
+      settings.map(async (s) => {
+        const brandName = s.subCategory;
+        const products = await Product.find({
+          brand: { $regex: new RegExp(`^${brandName}$`, "i") },
+        })
+          .sort({ sortOrder: 1, createdAt: -1 })
+          .limit(10)
+          .lean();
+
+        const bannerImages =
+          s.bannerImages && s.bannerImages.length > 0
+            ? s.bannerImages
+            : s.bannerImage
+            ? [s.bannerImage]
+            : [];
+
+        return {
+          brand: brandName,
+          products,
+          bannerImages,
+        };
+      })
+    );
+
+    const validSections = sections.filter((s) => s.products.length > 0);
+    setCached(cacheKey, validSections);
+    res.json(validSections);
+  } catch (err) {
+    console.error("getHomeSections error:", err);
     res.status(500).json({ message: "Server error", error: err.message });
   }
 };

@@ -6,6 +6,7 @@ const {
   getProduct,
   getFeaturedProducts,
   getProductsByIds,
+  getHomeSections,
   createProduct,
   updateProduct,
   deleteProduct,
@@ -15,6 +16,7 @@ const {
 router.get("/", getProducts);
 router.get("/featured", getFeaturedProducts);
 router.get("/by-ids", getProductsByIds);
+router.get("/home-sections", getHomeSections);
 router.get("/:id", getProduct);
 
 // Admin-only writes
